@@ -124,8 +124,8 @@ class _RTCVideoViewState extends State<RTCVideoView> {
     _setCallbacks();
     _aspectRatio = widget._renderer.aspectRatio;
     _mirror = widget._renderer.mirror;
-    // _objectFit = widget._renderer.objectFit;
-    _objectFit = RTCVideoViewObjectFit.RTCVideoViewObjectFitCover;
+    _objectFit = widget._renderer.objectFit;
+    // _objectFit = RTCVideoViewObjectFit.RTCVideoViewObjectFitCover;
   }
 
   @override
@@ -139,8 +139,8 @@ class _RTCVideoViewState extends State<RTCVideoView> {
       setState(() {
         _aspectRatio = widget._renderer.aspectRatio;
         _mirror = widget._renderer.mirror;
-        // _objectFit = widget._renderer.objectFit;
-        _objectFit = RTCVideoViewObjectFit.RTCVideoViewObjectFitCover;
+        _objectFit = widget._renderer.objectFit;
+        // _objectFit = RTCVideoViewObjectFit.RTCVideoViewObjectFitCover;
       });
     };
   }
