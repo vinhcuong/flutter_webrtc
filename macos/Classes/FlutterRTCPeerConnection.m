@@ -2,18 +2,10 @@
 #import "FlutterWebRTCPlugin.h"
 #import "FlutterRTCPeerConnection.h"
 #import "FlutterRTCDataChannel.h"
+#import "AudioUtils.h"
 
-#import <WebRTC/RTCConfiguration.h>
-#import <WebRTC/RTCIceCandidate.h>
-#import <WebRTC/RTCIceServer.h>
-#import <WebRTC/RTCMediaConstraints.h>
-#import <WebRTC/RTCIceCandidate.h>
-#import <WebRTC/RTCLegacyStatsReport.h>
-#import <WebRTC/RTCSessionDescription.h>
-#import <WebRTC/RTCConfiguration.h>
-#import <WebRTC/RTCAudioTrack.h>
-#import <WebRTC/RTCVideoTrack.h>
-#import <WebRTC/RTCMediaStream.h>
+#import <WebRTC/WebRTC.h>
+
 
 @implementation RTCPeerConnection (Flutter)
 
@@ -172,19 +164,25 @@
                        peerConnection:(RTCPeerConnection *)peerConnection
                                result:(FlutterResult)result
 {
-    [peerConnection addIceCandidate:candidate];
-    result(nil);
-    //NSLog(@"addICECandidateresult: %@", candidate);
+    [peerConnection addIceCandidate:candidate completionHandler:^(NSError *_Nullable error){
+        if (error) {
+            result([FlutterError errorWithCode:@"AddIceCandidateFailed"
+                                       message:[NSString stringWithFormat:@"Error %@", error.localizedDescription]
+                                       details:nil]);
+        } else {
+            result(nil);
+        }
+    }];
 }
 
 -(void) peerConnectionClose:(RTCPeerConnection *)peerConnection
 {
     [peerConnection close];
-    
+
     // Clean up peerConnection's streams and tracks
     [peerConnection.remoteStreams removeAllObjects];
     [peerConnection.remoteTracks removeAllObjects];
-    
+
     // Clean up peerConnection's dataChannels.
     NSMutableDictionary<NSString *, RTCDataChannel *> *dataChannels
     = peerConnection.dataChannels;
@@ -196,36 +194,71 @@
     [dataChannels removeAllObjects];
 }
 
--(void) peerConnectionGetStats:(nonnull NSString *)trackID
-                peerConnection:(nonnull RTCPeerConnection *)peerConnection
-                        result:(nonnull FlutterResult)result
-{
-    RTCMediaStreamTrack *track = nil;
-    if (!trackID
-        || !trackID.length
-        || (track = self.localTracks[trackID])
-        || (track = peerConnection.remoteTracks[trackID])) {
-        [peerConnection statsForTrack:track
-                     statsOutputLevel:RTCStatsOutputLevelStandard
-                    completionHandler:^(NSArray<RTCLegacyStatsReport *> *reports) {
-                        
+-(void) peerConnectionGetStatsForTrackId:(nonnull NSString *)trackID
+            peerConnection:(nonnull RTCPeerConnection *)peerConnection
+                    result:(nonnull FlutterResult)result {
+    RTCRtpSender *sender = nil;
+    RTCRtpReceiver *receiver = nil;
+    
+    for(RTCRtpSender *s in peerConnection.senders) {
+        if(s.track != nil && [s.track.trackId isEqualToString:trackID]) {
+            sender = s;
+        }
+    }
+    
+    for(RTCRtpReceiver *r in peerConnection.receivers) {
+        if(r.track != nil && [r.track.trackId isEqualToString:trackID]) {
+            receiver = r;
+        }
+    }
+
+    if (sender != nil) {
+        [peerConnection statisticsForSender:sender completionHandler:^(RTCStatisticsReport *statsReport) {
                         NSMutableArray *stats = [NSMutableArray array];
-                        
-                        for (RTCLegacyStatsReport *report in reports) {
-                            [stats addObject:@{@"id": report.reportId,
+                        for(id key in statsReport.statistics) {
+                            RTCStatistics *report = [statsReport.statistics objectForKey:key];
+                            [stats addObject:@{@"id": report.id,
                                                @"type": report.type,
-                                               @"timestamp": @(report.timestamp),
+                                               @"timestamp": @(report.timestamp_us),
                                                @"values": report.values
                                                }];
                         }
-                        
                         result(@{@"stats": stats});
                     }];
-    }else{
+    } else if (receiver != nil) {
+        [peerConnection statisticsForReceiver:receiver completionHandler:^(RTCStatisticsReport *statsReport) {
+                        NSMutableArray *stats = [NSMutableArray array];
+                        for(id key in statsReport.statistics) {
+                            RTCStatistics *report = [statsReport.statistics objectForKey:key];
+                            [stats addObject:@{@"id": report.id,
+                                               @"type": report.type,
+                                               @"timestamp": @(report.timestamp_us),
+                                               @"values": report.values
+                                               }];
+                        }
+                        result(@{@"stats": stats});
+                    }];
+    } else {
         result([FlutterError errorWithCode:@"GetStatsFailed"
                                    message:[NSString stringWithFormat:@"Error %@", @""]
                                    details:nil]);
     }
+}
+
+-(void) peerConnectionGetStats:(nonnull RTCPeerConnection *)peerConnection
+                        result:(nonnull FlutterResult)result {
+    [peerConnection statisticsWithCompletionHandler:^(RTCStatisticsReport *statsReport) {
+                    NSMutableArray *stats = [NSMutableArray array];
+                    for(id key in statsReport.statistics) {
+                        RTCStatistics *report = [statsReport.statistics objectForKey:key];
+                        [stats addObject:@{@"id": report.id,
+                                           @"type": report.type,
+                                           @"timestamp": @(report.timestamp_us),
+                                           @"values": report.values
+                                           }];
+                    }
+                    result(@{@"stats": stats});
+                }];
 }
 
 - (NSString *)stringForICEConnectionState:(RTCIceConnectionState)state {
@@ -263,6 +296,17 @@
     return nil;
 }
 
+- (NSString *)stringForPeerConnectionState:(RTCPeerConnectionState)state {
+    switch (state) {
+        case RTCPeerConnectionStateNew: return @"new";
+        case RTCPeerConnectionStateConnecting: return @"connecting";
+        case RTCPeerConnectionStateConnected: return @"connected";
+        case RTCPeerConnectionStateDisconnected: return @"disconnected";
+        case RTCPeerConnectionStateFailed: return @"failed";
+        case RTCPeerConnectionStateClosed: return @"closed";
+    }
+    return nil;
+}
 
 /**
  * Parses the constraint keys and values of a specific JavaScript object into
@@ -280,7 +324,7 @@
     for (id srcKey in src) {
         id srcValue = src[srcKey];
         NSString *dstValue;
-        
+
         if ([srcValue isKindOfClass:[NSNumber class]]) {
             dstValue = [srcValue boolValue] ? @"true" : @"false";
         } else {
@@ -303,16 +347,16 @@
     id mandatory = constraints[@"mandatory"];
     NSMutableDictionary<NSString *, NSString *> *mandatory_
     = [NSMutableDictionary new];
-    
+
     if ([mandatory isKindOfClass:[NSDictionary class]]) {
         [self parseJavaScriptConstraints:(NSDictionary *)mandatory
                    intoWebRTCConstraints:mandatory_];
     }
-    
+
     id optional = constraints[@"optional"];
     NSMutableDictionary<NSString *, NSString *> *optional_
     = [NSMutableDictionary new];
-    
+
     if ([optional isKindOfClass:[NSArray class]]) {
         for (id o in (NSArray *)optional) {
             if ([o isKindOfClass:[NSDictionary class]]) {
@@ -321,13 +365,14 @@
             }
         }
     }
-    
+
     return [[RTCMediaConstraints alloc] initWithMandatoryConstraints:mandatory_
                                                  optionalConstraints:optional_];
 }
 
 #pragma mark - RTCPeerConnectionDelegate methods
-
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wobjc-protocol-method-implementation"
 - (void)peerConnection:(RTCPeerConnection *)peerConnection didChangeSignalingState:(RTCSignalingState)newState {
     FlutterEventSink eventSink = peerConnection.eventSink;
     if(eventSink){
@@ -339,11 +384,11 @@
 
 -(void)peerConnection:(RTCPeerConnection *)peerConnection
           mediaStream:(RTCMediaStream *)stream didAddTrack:(RTCVideoTrack*)track{
-    
+
     peerConnection.remoteTracks[track.trackId] = track;
     NSString *streamId = stream.streamId;
     peerConnection.remoteStreams[streamId] = stream;
-    
+
     FlutterEventSink eventSink = peerConnection.eventSink;
     if(eventSink){
         eventSink(@{
@@ -386,19 +431,25 @@
     NSMutableArray *audioTracks = [NSMutableArray array];
     NSMutableArray *videoTracks = [NSMutableArray array];
 
+    BOOL hasAudio = NO;
     for (RTCAudioTrack *track in stream.audioTracks) {
         peerConnection.remoteTracks[track.trackId] = track;
         [audioTracks addObject:@{@"id": track.trackId, @"kind": track.kind, @"label": track.trackId, @"enabled": @(track.isEnabled), @"remote": @(YES), @"readyState": @"live"}];
+        hasAudio = YES;
     }
-    
+
     for (RTCVideoTrack *track in stream.videoTracks) {
         peerConnection.remoteTracks[track.trackId] = track;
         [videoTracks addObject:@{@"id": track.trackId, @"kind": track.kind, @"label": track.trackId, @"enabled": @(track.isEnabled), @"remote": @(YES), @"readyState": @"live"}];
     }
-    
+
     NSString *streamId = stream.streamId;
     peerConnection.remoteStreams[streamId] = stream;
-    
+
+    if (hasAudio) {
+        [self ensureAudioSession];
+    }
+
     FlutterEventSink eventSink = peerConnection.eventSink;
     if(eventSink){
         eventSink(@{
@@ -417,7 +468,7 @@
         NSLog(@"didRemoveStream - more than one stream entry found for stream instance with id: %@", stream.streamId);
     }
     NSString *streamId = stream.streamId;
-    
+
     for (RTCVideoTrack *track in stream.videoTracks) {
         [peerConnection.remoteTracks removeObjectForKey:track.trackId];
     }
@@ -425,7 +476,7 @@
         [peerConnection.remoteTracks removeObjectForKey:track.trackId];
     }
     [peerConnection.remoteStreams removeObjectForKey:streamId];
-    
+
     FlutterEventSink eventSink = peerConnection.eventSink;
     if(eventSink){
         eventSink(@{
@@ -477,28 +528,125 @@
         return;
     }
 
+    NSString *flutterChannelId = [[NSUUID UUID] UUIDString];
     NSNumber *dataChannelId = [NSNumber numberWithInteger:dataChannel.channelId];
     dataChannel.peerConnectionId = peerConnection.flutterId;
     dataChannel.delegate = self;
-    peerConnection.dataChannels[dataChannelId] = dataChannel;
-    
+    peerConnection.dataChannels[flutterChannelId] = dataChannel;
+
     FlutterEventChannel *eventChannel = [FlutterEventChannel
-                                         eventChannelWithName:[NSString stringWithFormat:@"FlutterWebRTC/dataChannelEvent%d", dataChannel.channelId]
+                                         eventChannelWithName:[NSString stringWithFormat:@"FlutterWebRTC/dataChannelEvent%1$@%2$@", peerConnection.flutterId, flutterChannelId]
                                          binaryMessenger:self.messenger];
-    
+
     dataChannel.eventChannel = eventChannel;
-    dataChannel.flutterChannelId = dataChannelId;
-    [eventChannel setStreamHandler:dataChannel];
-    
+    dataChannel.flutterChannelId = flutterChannelId;
+    dataChannel.eventQueue = nil;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+       // setStreamHandler on main thread
+       [eventChannel setStreamHandler:dataChannel];
+       FlutterEventSink eventSink = peerConnection.eventSink;
+       if(eventSink){
+           eventSink(@{
+                       @"event" : @"didOpenDataChannel",
+                       @"id": dataChannelId,
+                       @"label": dataChannel.label,
+                       @"flutterId": flutterChannelId
+                       });
+       }
+    });
+}
+
+/** Called any time the PeerConnectionState changes. */
+- (void)peerConnection:(RTCPeerConnection *)peerConnection
+didChangeConnectionState:(RTCPeerConnectionState)newState {
     FlutterEventSink eventSink = peerConnection.eventSink;
     if(eventSink){
         eventSink(@{
-                    @"event" : @"didOpenDataChannel",
-                    @"id": dataChannelId,
-                    @"label": dataChannel.label
+                    @"event" : @"peerConnectionState",
+                    @"state": [self stringForPeerConnectionState:newState]
                     });
     }
 }
+
+- (void)peerConnection:(RTCPeerConnection *)peerConnection
+didStartReceivingOnTransceiver:(RTCRtpTransceiver *)transceiver {
+
+}
+
+/** Called when a receiver and its track are created. */
+- (void)peerConnection:(RTCPeerConnection *)peerConnection
+        didAddReceiver:(RTCRtpReceiver *)rtpReceiver
+               streams:(NSArray<RTCMediaStream *> *)mediaStreams {
+    // For unified-plan
+    NSMutableArray* streams = [NSMutableArray array];
+    for(RTCMediaStream *stream in mediaStreams) {
+        [streams addObject:[self mediaStreamToMap:stream ownerTag:peerConnection.flutterId]];
+    }
+    FlutterEventSink eventSink = peerConnection.eventSink;
+    if(eventSink){
+        NSMutableDictionary *event = [NSMutableDictionary  dictionary];
+        [event addEntriesFromDictionary:@{
+        @"event": @"onTrack",
+        @"track": [self mediaTrackToMap:rtpReceiver.track],
+        @"receiver": [self receiverToMap:rtpReceiver],
+        @"streams": streams,
+        }];
+
+        if(peerConnection.configuration.sdpSemantics == RTCSdpSemanticsUnifiedPlan) {
+            for(RTCRtpTransceiver *transceiver in  peerConnection.transceivers) {
+                if(transceiver.receiver != nil && [transceiver.receiver.receiverId isEqualToString:rtpReceiver.receiverId]) {
+                    [event setValue:[self transceiverToMap:transceiver] forKey:@"transceiver"];
+                }
+            }
+        }
+
+        peerConnection.remoteTracks[rtpReceiver.track.trackId] = rtpReceiver.track;
+        if (mediaStreams.count > 0) {
+            peerConnection.remoteStreams[mediaStreams[0].streamId] = mediaStreams[0];
+        }
+
+        if ([rtpReceiver.track.kind isEqualToString:@"audio"]) {
+            [self ensureAudioSession];
+        }
+        eventSink(event);
+    }
+}
+
+/** Called when the receiver and its track are removed. */
+- (void)peerConnection:(RTCPeerConnection *)peerConnection
+     didRemoveReceiver:(RTCRtpReceiver *)rtpReceiver {
+
+}
+
+/** Called when the selected ICE candidate pair is changed. */
+- (void)peerConnection:(RTCPeerConnection *)peerConnection
+    didChangeLocalCandidate:(RTCIceCandidate *)local
+            remoteCandidate:(RTCIceCandidate *)remote
+             lastReceivedMs:(int)lastDataReceivedMs
+          changeReason:(NSString *)reason {
+
+    FlutterEventSink eventSink = peerConnection.eventSink;
+    if(eventSink){
+        eventSink(@{
+                    @"event" : @"onSelectedCandidatePairChanged",
+                    @"local" : @{
+                            @"candidate": local.sdp,
+                            @"sdpMLineIndex": @(local.sdpMLineIndex),
+                            @"sdpMid": local.sdpMid
+                    },
+                    @"remote" : @{
+                            @"candidate": remote.sdp,
+                            @"sdpMLineIndex": @(remote.sdpMLineIndex),
+                            @"sdpMid": remote.sdpMid
+                    },
+                    @"reason": reason,
+                    @"lastDataReceivedMs": @(lastDataReceivedMs)
+                  });
+    }
+}
+
+-(void)peerConnection:(RTCPeerConnection*)peerConnection didRemoveIceCandidates:(NSArray<RTCIceCandidate*>*)candidates {}
 
 @end
 

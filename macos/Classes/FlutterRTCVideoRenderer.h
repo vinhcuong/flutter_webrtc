@@ -1,5 +1,10 @@
 #import "FlutterWebRTCPlugin.h"
 
+#import <WebRTC/RTCVideoRenderer.h>
+#import <WebRTC/RTCMediaStream.h>
+#import <WebRTC/RTCVideoFrame.h>
+#import <WebRTC/RTCVideoTrack.h>
+
 @interface FlutterRTCVideoRenderer : NSObject <FlutterTexture, RTCVideoRenderer, FlutterStreamHandler>
 
 /**
@@ -23,6 +28,6 @@
 - (FlutterRTCVideoRenderer *)createWithTextureRegistry:(id<FlutterTextureRegistry>)registry
                        messenger:(NSObject<FlutterBinaryMessenger>*)messenger;
 
--(void)setStreamId:(NSString*)streamId view:(FlutterRTCVideoRenderer*)view peerConnectionId:(NSString *)peerConnectionId;
+-(void)rendererSetSrcObject:(FlutterRTCVideoRenderer*)renderer stream:(RTCVideoTrack*)videoTrack;
 
 @end

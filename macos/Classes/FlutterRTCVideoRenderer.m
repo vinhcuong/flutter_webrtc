@@ -1,11 +1,14 @@
 #import "FlutterRTCVideoRenderer.h"
-#import "FlutterWebRTCPlugin.h"
 
 #import <AVFoundation/AVFoundation.h>
 #import <CoreGraphics/CGImage.h>
-#import <OpenGL/OpenGL.h>
+#import <WebRTC/WebRTC.h>
+#import <WebRTC/RTCYUVPlanarBuffer.h>
+#import <WebRTC/RTCYUVHelper.h>
+
 #import <objc/runtime.h>
-#include "libyuv.h"
+
+#import "FlutterWebRTCPlugin.h"
 
 @implementation FlutterRTCVideoRenderer {
     CGSize _frameSize;
@@ -46,21 +49,6 @@
     if(_pixelBufferRef){
         CVBufferRelease(_pixelBufferRef);
     }
-}
-
-- (CVPixelBufferRef)copyPixelBuffer:(size_t)width height:(size_t)height {
-    if(_pixelBufferRef != nil) {
-        RTCCVPixelBuffer *rtcPixelbuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:_pixelBufferRef];
-        CVPixelBufferRef outbuffer;
-        CVPixelBufferCreate(kCFAllocatorDefault,
-                            width, height,
-                            kCVPixelFormatType_32BGRA,
-                            nil, &outbuffer);
-        
-        [rtcPixelbuffer cropAndScaleTo:outbuffer withTempBuffer:CVPixelBufferGetBaseAddress(outbuffer)];
-        return outbuffer;
-    }
-    return nil;
 }
 
 - (CVPixelBufferRef)copyPixelBuffer {
@@ -110,14 +98,21 @@
     
     id<RTCI420Buffer> buffer = [[RTCI420Buffer alloc] initWithWidth:rotated_width height:rotated_height];
     
-    I420Rotate(src.dataY, src.strideY,
-               src.dataU, src.strideU,
-               src.dataV, src.strideV,
-               (uint8_t*)buffer.dataY, buffer.strideY,
-               (uint8_t*)buffer.dataU,buffer.strideU,
-               (uint8_t*)buffer.dataV, buffer.strideV,
-               src.width, src.height,
-               (RotationModeEnum)rotation);
+    [RTCYUVHelper I420Rotate:src.dataY
+                  srcStrideY:src.strideY
+                        srcU:src.dataU
+                  srcStrideU:src.strideU
+                        srcV:src.dataV
+                  srcStrideV:src.strideV
+                        dstY:(uint8_t*)buffer.dataY
+                  dstStrideY:buffer.strideY
+                        dstU:(uint8_t*)buffer.dataU
+                  dstStrideU:buffer.strideU
+                        dstV:(uint8_t*)buffer.dataV
+                  dstStrideV:buffer.strideV
+                       width:src.width
+                       width:src.height
+                        mode:rotation];
     
     return buffer;
 }
@@ -136,46 +131,49 @@
         uint8_t* dstUV = CVPixelBufferGetBaseAddressOfPlane(outputPixelBuffer, 1);
         const size_t dstUVStride = CVPixelBufferGetBytesPerRowOfPlane(outputPixelBuffer, 1);
         
-        I420ToNV12(i420Buffer.dataY,
-                           i420Buffer.strideY,
-                           i420Buffer.dataU,
-                           i420Buffer.strideU,
-                           i420Buffer.dataV,
-                           i420Buffer.strideV,
-                           dstY,
-                           (int)dstYStride,
-                           dstUV,
-                           (int)dstUVStride,
-                           i420Buffer.width,
-                           i420Buffer.height);
+        [RTCYUVHelper I420ToNV12:i420Buffer.dataY
+                      srcStrideY:i420Buffer.strideY
+                            srcU:i420Buffer.dataU
+                      srcStrideU:i420Buffer.strideU
+                            srcV:i420Buffer.dataV
+                      srcStrideV:i420Buffer.strideV
+                            dstY:dstY
+                      dstStrideY:(int)dstYStride
+                            dstUV:dstUV
+                      dstStrideUV:(int)dstUVStride
+                           width:i420Buffer.width
+                           width:i420Buffer.height];
+
     } else {
         uint8_t* dst = CVPixelBufferGetBaseAddress(outputPixelBuffer);
         const size_t bytesPerRow = CVPixelBufferGetBytesPerRow(outputPixelBuffer);
         
         if (pixelFormat == kCVPixelFormatType_32BGRA) {
             // Corresponds to libyuv::FOURCC_ARGB
-            I420ToARGB(i420Buffer.dataY,
-                               i420Buffer.strideY,
-                               i420Buffer.dataU,
-                               i420Buffer.strideU,
-                               i420Buffer.dataV,
-                               i420Buffer.strideV,
-                               dst,
-                               (int)bytesPerRow,
-                               i420Buffer.width,
-                               i420Buffer.height);
+        
+            [RTCYUVHelper I420ToARGB:i420Buffer.dataY
+                          srcStrideY:i420Buffer.strideY
+                                srcU:i420Buffer.dataU
+                          srcStrideU:i420Buffer.strideU
+                                srcV:i420Buffer.dataV
+                          srcStrideV:i420Buffer.strideV
+                             dstARGB:dst
+                       dstStrideARGB:(int)bytesPerRow
+                               width:i420Buffer.width
+                              height:i420Buffer.height];
+
         } else if (pixelFormat == kCVPixelFormatType_32ARGB) {
             // Corresponds to libyuv::FOURCC_BGRA
-            I420ToBGRA(i420Buffer.dataY,
-                               i420Buffer.strideY,
-                               i420Buffer.dataU,
-                               i420Buffer.strideU,
-                               i420Buffer.dataV,
-                               i420Buffer.strideV,
-                               dst,
-                               (int)bytesPerRow,
-                               i420Buffer.width,
-                               i420Buffer.height);
+            [RTCYUVHelper I420ToBGRA:i420Buffer.dataY
+                          srcStrideY:i420Buffer.strideY
+                                srcU:i420Buffer.dataU
+                          srcStrideU:i420Buffer.strideU
+                                srcV:i420Buffer.dataV
+                          srcStrideV:i420Buffer.strideV
+                             dstBGRA:dst
+                       dstStrideBGRA:(int)bytesPerRow
+                               width:i420Buffer.width
+                              height:i420Buffer.height];
         }
     }
     
@@ -273,22 +271,8 @@
     return [[FlutterRTCVideoRenderer alloc] initWithTextureRegistry:registry messenger:messenger];
 }
 
--(void)setStreamId:(NSString*)streamId view:(FlutterRTCVideoRenderer*)view peerConnectionId:(NSString *)peerConnectionId{
-    
-    RTCVideoTrack *videoTrack;
-    RTCMediaStream *stream = [self streamForId:streamId peerConnectionId:peerConnectionId];
-    if(stream){
-        NSArray *videoTracks = stream ? stream.videoTracks : nil;
-        videoTrack = videoTracks && videoTracks.count ? videoTracks[0] : nil;
-        if (!videoTrack) {
-            NSLog(@"No video track for RTCMediaStream: %@", streamId);
-        }
-    } else {
-        videoTrack = nil;
-    }
-    
-    view.videoTrack = videoTrack;
+-(void)rendererSetSrcObject:(FlutterRTCVideoRenderer*)renderer stream:(RTCVideoTrack*)videoTrack {
+    renderer.videoTrack = videoTrack;
 }
-
 @end
 

@@ -8,5 +8,11 @@
 			"name": "example"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"java.configuration.updateBuildConfiguration": "disabled",
+		"clang-format.executable": "/usr/bin/clang-format",
+		"files.associations": {
+			"*.tcc": "cpp"
+		}
+	}
 }

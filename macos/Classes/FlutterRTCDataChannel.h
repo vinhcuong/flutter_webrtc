@@ -2,10 +2,11 @@
 #import <WebRTC/RTCDataChannel.h>
 
 @interface RTCDataChannel (Flutter) <FlutterStreamHandler>
-@property (nonatomic, strong) NSString *peerConnectionId;
-@property (nonatomic, strong) NSNumber *flutterChannelId;
-@property (nonatomic, strong) FlutterEventSink eventSink;
-@property (nonatomic, strong) FlutterEventChannel* eventChannel;
+@property (nonatomic, strong, nonnull) NSString *peerConnectionId;
+@property (nonatomic, strong, nonnull) NSString *flutterChannelId;
+@property (nonatomic, strong, nullable) FlutterEventSink eventSink;
+@property (nonatomic, strong, nullable) FlutterEventChannel *eventChannel;
+@property (nonatomic, strong, nullable) NSArray<id> *eventQueue;
 @end
 
 @interface FlutterWebRTCPlugin (RTCDataChannel) <RTCDataChannelDelegate>
@@ -14,7 +15,8 @@
 -(void)createDataChannel:(nonnull NSString *)peerConnectionId
                    label:(nonnull NSString *)label
                   config:(nonnull RTCDataChannelConfiguration *)config
-               messenger:(NSObject<FlutterBinaryMessenger>*)messenger;
+               messenger:(nonnull NSObject<FlutterBinaryMessenger> *)messenger
+                  result:(nonnull FlutterResult)result;
 
 -(void)dataChannelClose:(nonnull NSString *)peerConnectionId
           dataChannelId:(nonnull NSString *)dataChannelId;
